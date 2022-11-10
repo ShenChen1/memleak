@@ -44,6 +44,8 @@ const volatile size_t min_size = 0;
 const volatile size_t max_size = 1UL << 32;
 const volatile int sample_rate = 1;
 const volatile int stack_flags = 0;
+const volatile bool wa_missing_free = false;
+const volatile long page_size = 4096;
 
 static inline void update_statistics_add(u64 stack_id, u64 sz)
 {
@@ -269,4 +271,78 @@ SEC("uretprobe/pvalloc")
 int BPF_KRETPROBE(uretprobe_pvalloc, void *ret)
 {
     return gen_alloc_exit(ctx);
+}
+
+SEC("tracepoint/kmem/kmalloc")
+int tracepoint_kmalloc(struct trace_event_raw_kmem_alloc *args)
+{
+    if (wa_missing_free)
+        gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+    gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+SEC("tracepoint/kmem/kmalloc_node")
+int tracepoint_kmalloc_node(struct trace_event_raw_kmem_alloc_node *args)
+{
+    if (wa_missing_free)
+        gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+    gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+SEC("tracepoint/kmem/kfree")
+int tracepoint_kfree(struct trace_event_raw_kfree *args)
+{
+    return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+}
+
+SEC("tracepoint/kmem/kmem_cache_alloc")
+int tracepoint_kmem_cache_alloc(struct trace_event_raw_kmem_alloc *args)
+{
+    if (wa_missing_free)
+        gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+    gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+SEC("tracepoint/kmem/kmem_cache_alloc_node")
+int tracepoint_kmem_cache_alloc_node(struct trace_event_raw_kmem_alloc_node *args)
+{
+    if (wa_missing_free)
+        gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+    gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+SEC("tracepoint/kmem/kmem_cache_free")
+int tracepoint_kmem_cache_free(struct trace_event_raw_kmem_cache_free *args)
+{
+    return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+}
+
+SEC("tracepoint/kmem/mm_page_alloc")
+int tracepoint_mm_page_alloc(struct trace_event_raw_mm_page_alloc *args)
+{
+    gen_alloc_enter((struct pt_regs *)args, page_size << args->order);
+    return gen_alloc_exit2((struct pt_regs *)args, args->pfn);
+}
+
+SEC("tracepoint/kmem/mm_page_free")
+int tracepoint_mm_page_free(struct trace_event_raw_mm_page_free *args)
+{
+    return gen_free_enter((struct pt_regs *)args, (void *)args->pfn);
+}
+
+SEC("tracepoint/percpu/percpu_alloc_percpu")
+int tracepoint_percpu_alloc_percpu(struct trace_event_raw_percpu_alloc_percpu *args)
+{
+    gen_alloc_enter((struct pt_regs *)args, args->size);
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+SEC("tracepoint/percpu/percpu_free_percpu")
+int tracepoint_percpu_free_percpu(struct trace_event_raw_percpu_free_percpu *args)
+{
+    return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
 }

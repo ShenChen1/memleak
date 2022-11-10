@@ -37,6 +37,7 @@ static struct
     size_t max_size;
     char *obj;
     bool percpu;
+    bool kernel_trace;
 } env = {
     .pid = -1,
     .trace_all = false,
@@ -53,6 +54,7 @@ static struct
     .max_size = 0,
     .obj = NULL,
     .percpu = false,
+    .kernel_trace = false,
 };
 
 static const struct argp_option opts[] = {
@@ -235,6 +237,8 @@ static const struct argp argp = {
     .parser = parse_opt,
     .doc = argp_program_doc,
 };
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
 {
@@ -458,7 +462,36 @@ cleanup:
     free(uip);
 }
 
-static void print_outstanding(struct memleak_bpf *skel, struct syms_cache *syms_cache)
+static void print_kernel_stack(struct memleak_bpf *skel, struct ksyms *ksyms, __u32 stack_id)
+{
+    size_t cap = bpf_map__value_size(skel->maps.stack_traces);
+    __u64 *uip = (void *)calloc(1, cap);
+    if (uip == NULL) {
+        fprintf(stderr, "Failed to calloc\n");
+        return;
+    }
+
+    int err = bpf_map__lookup_elem(skel->maps.stack_traces, &stack_id, sizeof(__u32), uip, cap, 0);
+    if (err < 0) {
+        printf("\t\tstack information lost\n");
+        goto cleanup;
+    }
+
+    cap /= sizeof(__u64);
+    for (size_t j = 0; uip[j] && j < cap; j++) {
+        const struct ksym *ksym = ksyms__map_addr(ksyms, uip[j]);
+        if (ksym) {
+            printf("\t\t%s+0x%lx\n", ksym->name, (uint64_t)uip[j] - ksym->addr);
+        } else {
+            printf("\t\t0x%lx\n", (uint64_t)uip[j]);
+        }
+    }
+
+cleanup:
+    free(uip);
+}
+
+static void print_outstanding(struct memleak_bpf *skel, struct syms_cache *syms_cache, struct ksyms *ksyms)
 {
     time_t now;
     time(&now);
@@ -471,7 +504,6 @@ static void print_outstanding(struct memleak_bpf *skel, struct syms_cache *syms_
         fprintf(stderr, "Failed to calloc\n");
         return;
     }
-
 
     size_t cnt = 0;
     __u64 addr = 0, next_addr;
@@ -518,7 +550,10 @@ static void print_outstanding(struct memleak_bpf *skel, struct syms_cache *syms_
     size_t count = 0;
     for (alloc_info_hash_t *s = alloc_info; s != NULL; s = (s->hh.next)) {
         printf("\t%zu bytes in %zu allocations from stack\n", s->size, s->count);
-        print_user_stack(skel, syms_cache, s->stack_id);
+        if (env.kernel_trace)
+            print_kernel_stack(skel, ksyms, s->stack_id);
+        else
+            print_user_stack(skel, syms_cache, s->stack_id);
 
         if (count++ == env.top)
             break;
@@ -529,7 +564,7 @@ cleanup:
     free(allocs);
 }
 
-static void print_outstanding_combined(struct memleak_bpf *skel, struct syms_cache *syms_cache)
+static void print_outstanding_combined(struct memleak_bpf *skel, struct syms_cache *syms_cache, struct ksyms *ksyms)
 {
     time_t now;
     time(&now);
@@ -562,8 +597,14 @@ static void print_outstanding_combined(struct memleak_bpf *skel, struct syms_cac
     qsort(stacks, cnt, sizeof(combined_alloc_info_map_t), combined_alloc_info_compare);
 
     for (size_t i = 0; i < cnt; i++) {
+        if (!stacks[i].info.total_size)
+            continue;
+
         printf("\t%llu bytes in %llu allocations from stack\n", stacks[i].info.total_size, stacks[i].info.number_of_allocs);
-        print_user_stack(skel, syms_cache, stacks[i].stack_id);
+        if (env.kernel_trace)
+            print_kernel_stack(skel, ksyms, stacks[i].stack_id);
+        else
+            print_user_stack(skel, syms_cache, stacks[i].stack_id);
 
         if (i == env.top)
             break;
@@ -572,6 +613,8 @@ static void print_outstanding_combined(struct memleak_bpf *skel, struct syms_cac
 cleanup:
     free(stacks);
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char **argv)
 {
@@ -583,6 +626,7 @@ int main(int argc, char **argv)
     if (err)
         return err;
 
+    env.kernel_trace = (env.pid == -1 && env.command == NULL);
     if (env.command != NULL) {
         printf("Executing '%s' and tracing the resulting process.\n", env.command);
         env.pid = create_child_process(env.command);
@@ -603,10 +647,61 @@ int main(int argc, char **argv)
     skel->rodata->min_size = env.min_size;
     skel->rodata->max_size = env.max_size;
     skel->rodata->trace_all = env.trace_all;
-    skel->rodata->stack_flags = BPF_F_USER_STACK;
+    skel->rodata->page_size = sysconf(_SC_PAGESIZE);
+    skel->rodata->wa_missing_free = env.wa_missing_free;
+    skel->rodata->stack_flags = env.kernel_trace ? 0 : BPF_F_USER_STACK;
 
     bpf_map__set_value_size(skel->maps.stack_traces, 127 * sizeof(__u64));
     bpf_map__set_max_entries(skel->maps.stack_traces, 10 * 1024);
+
+    if (env.kernel_trace) {
+        /* Disable all uprobes */
+        bpf_program__set_autoload(skel->progs.uprobe_malloc, false);
+        bpf_program__set_autoload(skel->progs.uretprobe_malloc, false);
+        bpf_program__set_autoload(skel->progs.uprobe_free, false);
+        bpf_program__set_autoload(skel->progs.uprobe_calloc, false);
+        bpf_program__set_autoload(skel->progs.uretprobe_calloc, false);
+        bpf_program__set_autoload(skel->progs.uprobe_realloc, false);
+        bpf_program__set_autoload(skel->progs.uretprobe_realloc, false);
+        bpf_program__set_autoload(skel->progs.uprobe_mmap, false);
+        bpf_program__set_autoload(skel->progs.uretprobe_mmap, false);
+        bpf_program__set_autoload(skel->progs.uprobe_munmap, false);
+        bpf_program__set_autoload(skel->progs.uprobe_posix_memalign, false);
+        bpf_program__set_autoload(skel->progs.uretprobe_posix_memalign, false);
+        bpf_program__set_autoload(skel->progs.uprobe_aligned_alloc, false);
+        bpf_program__set_autoload(skel->progs.uretprobe_aligned_alloc, false);
+        bpf_program__set_autoload(skel->progs.uprobe_valloc, false);
+        bpf_program__set_autoload(skel->progs.uretprobe_valloc, false);
+        bpf_program__set_autoload(skel->progs.uprobe_memalign, false);
+        bpf_program__set_autoload(skel->progs.uretprobe_memalign, false);
+        bpf_program__set_autoload(skel->progs.uprobe_pvalloc, false);
+        bpf_program__set_autoload(skel->progs.uretprobe_pvalloc, false);
+        if (env.percpu) {
+            bpf_program__set_autoload(skel->progs.tracepoint_kmalloc, false);
+            bpf_program__set_autoload(skel->progs.tracepoint_kfree, false);
+            bpf_program__set_autoload(skel->progs.tracepoint_kmalloc_node, false);
+            bpf_program__set_autoload(skel->progs.tracepoint_kmem_cache_alloc, false);
+            bpf_program__set_autoload(skel->progs.tracepoint_kmem_cache_alloc_node, false);
+            bpf_program__set_autoload(skel->progs.tracepoint_kmem_cache_free, false);
+            bpf_program__set_autoload(skel->progs.tracepoint_mm_page_alloc, false);
+            bpf_program__set_autoload(skel->progs.tracepoint_mm_page_free, false);
+        } else {
+            bpf_program__set_autoload(skel->progs.tracepoint_percpu_alloc_percpu, false);
+            bpf_program__set_autoload(skel->progs.tracepoint_percpu_free_percpu, false);
+        }
+    } else {
+        /* Disable all kernel tracepoints*/
+        bpf_program__set_autoload(skel->progs.tracepoint_kmalloc, false);
+        bpf_program__set_autoload(skel->progs.tracepoint_kfree, false);
+        bpf_program__set_autoload(skel->progs.tracepoint_kmalloc_node, false);
+        bpf_program__set_autoload(skel->progs.tracepoint_kmem_cache_alloc, false);
+        bpf_program__set_autoload(skel->progs.tracepoint_kmem_cache_alloc_node, false);
+        bpf_program__set_autoload(skel->progs.tracepoint_kmem_cache_free, false);
+        bpf_program__set_autoload(skel->progs.tracepoint_mm_page_alloc, false);
+        bpf_program__set_autoload(skel->progs.tracepoint_mm_page_free, false);
+        bpf_program__set_autoload(skel->progs.tracepoint_percpu_alloc_percpu, false);
+        bpf_program__set_autoload(skel->progs.tracepoint_percpu_free_percpu, false);
+    }
 
     /* Load & verify BPF programs */
     err = memleak_bpf__load(skel);
@@ -615,30 +710,40 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
+    struct ksyms *ksyms = ksyms__load();
+    if (!ksyms) {
+        fprintf(stderr, "Failed to load ksyms\n");
+        goto cleanup;
+    }
+
     struct syms_cache *syms_cache = syms_cache__new(0);
     if (!syms_cache) {
-        fprintf(stderr, "failed to create syms_cache\n");
+        fprintf(stderr, "Failed to create syms_cache\n");
         goto cleanup;
     }
 
-    err = get_libc_path();
-    if (err) {
-        fprintf(stderr, "could not find libc.so\n");
-        goto cleanup;
-    }
+    if (!env.kernel_trace) {
+        err = get_libc_path();
+        if (err) {
+            fprintf(stderr, "Could not find libc.so\n");
+            goto cleanup;
+        }
 
-    printf("Attaching to pid %d, Ctrl+C to quit.\n", env.pid);
-    INIT_UPROBE_URETPROBE(malloc, env.pid, env.obj, "malloc");
-    INIT_UPROBE(free, env.pid, env.obj, "free");
-    INIT_UPROBE_URETPROBE(calloc, env.pid, env.obj, "calloc");
-    INIT_UPROBE_URETPROBE(realloc, env.pid, env.obj, "realloc");
-    INIT_UPROBE_URETPROBE(mmap, env.pid, env.obj, "mmap");
-    INIT_UPROBE(munmap, env.pid, env.obj, "munmap");
-    INIT_UPROBE_URETPROBE(posix_memalign, env.pid, env.obj, "posix_memalign");
-    INIT_UPROBE_URETPROBE(aligned_alloc, env.pid, env.obj, "aligned_alloc");
-    INIT_UPROBE_URETPROBE(valloc, env.pid, env.obj, "valloc");
-    INIT_UPROBE_URETPROBE(memalign, env.pid, env.obj, "memalign");
-    INIT_UPROBE_URETPROBE(pvalloc, env.pid, env.obj, "pvalloc");
+        printf("Attaching to pid %d, Ctrl+C to quit.\n", env.pid);
+        INIT_UPROBE_URETPROBE(malloc, env.pid, env.obj, "malloc");
+        INIT_UPROBE(free, env.pid, env.obj, "free");
+        INIT_UPROBE_URETPROBE(calloc, env.pid, env.obj, "calloc");
+        INIT_UPROBE_URETPROBE(realloc, env.pid, env.obj, "realloc");
+        INIT_UPROBE_URETPROBE(mmap, env.pid, env.obj, "mmap");
+        INIT_UPROBE(munmap, env.pid, env.obj, "munmap");
+        INIT_UPROBE_URETPROBE(posix_memalign, env.pid, env.obj, "posix_memalign");
+        INIT_UPROBE_URETPROBE(aligned_alloc, env.pid, env.obj, "aligned_alloc");
+        INIT_UPROBE_URETPROBE(valloc, env.pid, env.obj, "valloc");
+        INIT_UPROBE_URETPROBE(memalign, env.pid, env.obj, "memalign");
+        INIT_UPROBE_URETPROBE(pvalloc, env.pid, env.obj, "pvalloc");
+    } else {
+        printf("Attaching to kernel allocators, Ctrl+C to quit.\n");
+    }
 
     /* Let libbpf perform auto-attach for uprobe/uretprobe
      * NOTICE: we provide path and symbol stacks in SEC for BPF programs
@@ -657,9 +762,9 @@ int main(int argc, char **argv)
             sleep(env.interval);
 
             if (env.combined_only)
-                print_outstanding_combined(skel, syms_cache);
+                print_outstanding_combined(skel, syms_cache, ksyms);
             else
-                print_outstanding(skel, syms_cache);
+                print_outstanding(skel, syms_cache, ksyms);
 
             count_so_far++;
             if (env.count && count_so_far >= env.count)
@@ -672,5 +777,7 @@ cleanup:
         memleak_bpf__destroy(skel);
     if (syms_cache)
         syms_cache__free(syms_cache);
+    if (ksyms)
+        ksyms__free(ksyms);
     return -err;
 }
