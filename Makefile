@@ -8,7 +8,7 @@ ARCH ?= arm64
 VMLINUX ?= ../../linux/vmlinux
 BPFTOOL ?= ../bpftool/src/bpftool
 CFLAGS := -g -Wall -Werror --sysroot=$(shell $(CROSS_COMPILE)gcc -print-sysroot)
-INCLUDES := -I$(OUTPUT) -I./helpers
+INCLUDES := -I$(OUTPUT) -I./3rdparty/bcc/libbpf-tools/ -I./3rdparty/uthash/src/
 
 APPS = memleak
 
@@ -71,7 +71,7 @@ $(OUTPUT)/%.o: %.c $(wildcard %.h) | $(OUTPUT)
 	$(call msg,CC,$@)
 	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
 
-$(OUTPUT)/%.o: helpers/%.c $(wildcard %.h) | $(OUTPUT)
+$(OUTPUT)/%.o: ./3rdparty/bcc/libbpf-tools/%.c $(wildcard %.h) | $(OUTPUT)
 	$(call msg,CC,$@)
 	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
 

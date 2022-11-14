@@ -1,0 +1,12 @@
+[submodule "3rdparty/bcc"]
+	path = 3rdparty/bcc
+	url = https://github.com/iovisor/bcc.git
+[submodule "3rdparty/bpftool"]
+	path = 3rdparty/bpftool
+	url = https://github.com/libbpf/bpftool.git
+[submodule "3rdparty/libbpf"]
+	path = 3rdparty/libbpf
+	url = https://github.com/libbpf/libbpf.git
+[submodule "3rdparty/uthash"]
+	path = 3rdparty/uthash
+	url = https://github.com/troydhanson/uthash.git
