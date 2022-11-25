@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 #include <vmlinux.h>
+#include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include "memleak.h"
+
+extern int LINUX_KERNEL_VERSION __kconfig;
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -274,75 +277,161 @@ int BPF_KRETPROBE(uretprobe_pvalloc, void *ret)
 }
 
 SEC("tracepoint/kmem/kmalloc")
-int tracepoint_kmalloc(struct trace_event_raw_kmem_alloc *args)
+int tracepoint_kmalloc(void *__args)
 {
+    struct trace_event_raw_kmem_alloc {
+        struct trace_entry ent;
+        const void *ptr;
+        size_t bytes_alloc;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_kmem_alloc *args = __args;
     if (wa_missing_free)
-        gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
-    gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
-    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+        gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
+    gen_alloc_enter((struct pt_regs *)args, BPF_CORE_READ(args, bytes_alloc));
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)BPF_CORE_READ(args, ptr));
 }
 
 SEC("tracepoint/kmem/kmalloc_node")
-int tracepoint_kmalloc_node(struct trace_event_raw_kmem_alloc_node *args)
+int tracepoint_kmalloc_node(void *__args)
 {
+    struct trace_event_raw_kmem_alloc_node {
+        struct trace_entry ent;
+        const void *ptr;
+        size_t bytes_alloc;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_kmem_alloc_node *args = __args;
     if (wa_missing_free)
-        gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
-    gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
-    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+        gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
+    gen_alloc_enter((struct pt_regs *)args, BPF_CORE_READ(args, bytes_alloc));
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)BPF_CORE_READ(args, ptr));
 }
 
 SEC("tracepoint/kmem/kfree")
-int tracepoint_kfree(struct trace_event_raw_kfree *args)
+int tracepoint_kfree(void *__args)
 {
-    return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+    struct trace_event_raw_kmem_free {
+        struct trace_entry ent;
+        const void *ptr;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_kfree {
+        struct trace_entry ent;
+        const void *ptr;
+    } __attribute__((preserve_access_index));
+
+    if (LINUX_KERNEL_VERSION > KERNEL_VERSION(5, 18, 0)) {
+        struct trace_event_raw_kfree *args = __args;
+        return gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
+    } else {
+        struct trace_event_raw_kmem_free *args = __args;
+        return gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
+    }
 }
 
 SEC("tracepoint/kmem/kmem_cache_alloc")
-int tracepoint_kmem_cache_alloc(struct trace_event_raw_kmem_alloc *args)
+int tracepoint_kmem_cache_alloc(void *__args)
 {
+    struct trace_event_raw_kmem_alloc {
+        struct trace_entry ent;
+        const void *ptr;
+        size_t bytes_alloc;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_kmem_alloc *args = __args;
     if (wa_missing_free)
-        gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
-    gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
-    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+        gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
+    gen_alloc_enter((struct pt_regs *)args, BPF_CORE_READ(args, bytes_alloc));
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)BPF_CORE_READ(args, ptr));
 }
 
 SEC("tracepoint/kmem/kmem_cache_alloc_node")
-int tracepoint_kmem_cache_alloc_node(struct trace_event_raw_kmem_alloc_node *args)
+int tracepoint_kmem_cache_alloc_node(void *__args)
 {
+    struct trace_event_raw_kmem_alloc_node {
+        struct trace_entry ent;
+        const void *ptr;
+        size_t bytes_alloc;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_kmem_alloc_node *args = __args;
     if (wa_missing_free)
-        gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
-    gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
-    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+        gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
+    gen_alloc_enter((struct pt_regs *)args, BPF_CORE_READ(args, bytes_alloc));
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)BPF_CORE_READ(args, ptr));
 }
 
 SEC("tracepoint/kmem/kmem_cache_free")
-int tracepoint_kmem_cache_free(struct trace_event_raw_kmem_cache_free *args)
+int tracepoint_kmem_cache_free(void *__args)
 {
-    return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+    struct trace_event_raw_kmem_free {
+        struct trace_entry ent;
+        const void *ptr;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_kmem_cache_free {
+        struct trace_entry ent;
+        const void *ptr;
+    } __attribute__((preserve_access_index));
+
+    if (LINUX_KERNEL_VERSION > KERNEL_VERSION(5, 18, 0)) {
+        struct trace_event_raw_kmem_cache_free *args = __args;
+        return gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
+    } else {
+        struct trace_event_raw_kmem_free *args = __args;
+        return gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
+    }
 }
 
 SEC("tracepoint/kmem/mm_page_alloc")
-int tracepoint_mm_page_alloc(struct trace_event_raw_mm_page_alloc *args)
+int tracepoint_mm_page_alloc(void *__args)
 {
-    gen_alloc_enter((struct pt_regs *)args, page_size << args->order);
-    return gen_alloc_exit2((struct pt_regs *)args, args->pfn);
+    struct trace_event_raw_mm_page_alloc {
+        struct trace_entry ent;
+        long unsigned int pfn;
+        unsigned int order;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_mm_page_alloc *args = __args;
+    gen_alloc_enter((struct pt_regs *)args, page_size << BPF_CORE_READ(args, order));
+    return gen_alloc_exit2((struct pt_regs *)args, BPF_CORE_READ(args, pfn));
 }
 
 SEC("tracepoint/kmem/mm_page_free")
-int tracepoint_mm_page_free(struct trace_event_raw_mm_page_free *args)
+int tracepoint_mm_page_free(void *__args)
 {
-    return gen_free_enter((struct pt_regs *)args, (void *)args->pfn);
+    struct trace_event_raw_mm_page_free {
+        struct trace_entry ent;
+        long unsigned int pfn;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_mm_page_free *args = __args;
+    return gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, pfn));
 }
 
 SEC("tracepoint/percpu/percpu_alloc_percpu")
-int tracepoint_percpu_alloc_percpu(struct trace_event_raw_percpu_alloc_percpu *args)
+int tracepoint_percpu_alloc_percpu(void *__args)
 {
-    gen_alloc_enter((struct pt_regs *)args, args->size);
-    return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+    struct trace_event_raw_percpu_alloc_percpu {
+        struct trace_entry ent;
+        size_t size;
+        void *ptr;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_percpu_alloc_percpu *args = __args;
+    gen_alloc_enter((struct pt_regs *)args, BPF_CORE_READ(args, size));
+    return gen_alloc_exit2((struct pt_regs *)args, (size_t)BPF_CORE_READ(args, ptr));
 }
 
 SEC("tracepoint/percpu/percpu_free_percpu")
-int tracepoint_percpu_free_percpu(struct trace_event_raw_percpu_free_percpu *args)
+int tracepoint_percpu_free_percpu(void *__args)
 {
-    return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+    struct trace_event_raw_percpu_free_percpu {
+        struct trace_entry ent;
+        void *ptr;
+    } __attribute__((preserve_access_index));
+
+    struct trace_event_raw_percpu_free_percpu *args = __args;
+    return gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
 }
