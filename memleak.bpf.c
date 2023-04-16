@@ -321,7 +321,7 @@ int tracepoint_kfree(void *__args)
         const void *ptr;
     } __attribute__((preserve_access_index));
 
-    if (LINUX_KERNEL_VERSION > KERNEL_VERSION(5, 18, 0)) {
+    if (bpf_core_type_exists(struct trace_event_raw_kfree)) {
         struct trace_event_raw_kfree *args = __args;
         return gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
     } else {
@@ -375,7 +375,7 @@ int tracepoint_kmem_cache_free(void *__args)
         const void *ptr;
     } __attribute__((preserve_access_index));
 
-    if (LINUX_KERNEL_VERSION > KERNEL_VERSION(5, 18, 0)) {
+    if (bpf_core_type_exists(struct trace_event_raw_kmem_cache_free)) {
         struct trace_event_raw_kmem_cache_free *args = __args;
         return gen_free_enter((struct pt_regs *)args, (void *)BPF_CORE_READ(args, ptr));
     } else {
