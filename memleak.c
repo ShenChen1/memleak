@@ -397,7 +397,9 @@ static int by_size(const void *l, const void *r)
     const alloc_info_hash_t *left = l;
     const alloc_info_hash_t *right = r;
 
-    return left->size > right->size;
+    if (left->size > right->size) return -1;
+    if (left->size > right->size) return 1;
+    return 0;
 }
 
 static void hash_sort_alloc_info_by_size()
@@ -417,7 +419,9 @@ static int combined_alloc_info_compare(const void *l, const void *r)
     const combined_alloc_info_map_t *left = l;
     const combined_alloc_info_map_t *right = r;
 
-    return left->info.total_size > right->info.total_size;
+    if (left->info.total_size > right->info.total_size) return -1;
+    if (left->info.total_size < right->info.total_size) return 1;
+    return 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -496,7 +500,7 @@ static void print_outstanding(struct memleak_bpf *skel, struct syms_cache *syms_
     time_t now;
     time(&now);
     struct tm *timeinfo = localtime(&now);
-    printf("[%02x:%02d:%02d] Top %d stacks with outstanding allocations:\n", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, env.top);
+    printf("[%02d:%02d:%02d] Top %d stacks with outstanding allocations:\n", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, env.top);
 
     size_t cap = bpf_map__max_entries(skel->maps.allocs);
     alloc_info_map_t *allocs = (void *)calloc(cap, sizeof(alloc_info_map_t));
@@ -510,8 +514,11 @@ static void print_outstanding(struct memleak_bpf *skel, struct syms_cache *syms_
     while (!bpf_map__get_next_key(skel->maps.allocs, &addr, &next_addr, sizeof(__u64))) {
         struct alloc_info_t alloc = {};
         int err = bpf_map__lookup_elem(skel->maps.allocs, &next_addr, sizeof(__u64), &alloc, sizeof(struct alloc_info_t), 0);
+        if (err < 0 && errno == ENOENT) {
+            break;
+        }
         if (err < 0) {
-            fprintf(stderr, "Failed to lookup allocs: %d\n", err);
+            fprintf(stderr, "Failed to lookup allocs: %d\n", errno);
             goto cleanup;
         }
 
@@ -555,7 +562,7 @@ static void print_outstanding(struct memleak_bpf *skel, struct syms_cache *syms_
         else
             print_user_stack(skel, syms_cache, s->stack_id);
 
-        if (count++ == env.top)
+        if (++count == env.top)
             break;
     }
 
@@ -569,7 +576,7 @@ static void print_outstanding_combined(struct memleak_bpf *skel, struct syms_cac
     time_t now;
     time(&now);
     struct tm *timeinfo = localtime(&now);
-    printf("[%02x:%02d:%02d] Top %d stacks with outstanding allocations:\n", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, env.top);
+    printf("[%02d:%02d:%02d] Top %d stacks with outstanding allocations:\n", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, env.top);
 
     size_t cap = bpf_map__max_entries(skel->maps.combined_allocs);
     combined_alloc_info_map_t *stacks = (void *)calloc(cap, sizeof(combined_alloc_info_map_t));
@@ -583,8 +590,11 @@ static void print_outstanding_combined(struct memleak_bpf *skel, struct syms_cac
     while (!bpf_map__get_next_key(skel->maps.combined_allocs, stack_id ? &stack_id : NULL, &next_stack_id, sizeof(__u64))) {
         struct combined_alloc_info_t stack = {};
         int err = bpf_map__lookup_elem(skel->maps.combined_allocs, &next_stack_id, sizeof(__u64), &stack, sizeof(struct combined_alloc_info_t), 0);
+        if (err < 0 && errno == ENOENT) {
+            break;
+        }
         if (err < 0) {
-            fprintf(stderr, "Failed to lookup stacks: %d\n", err);
+            fprintf(stderr, "Failed to lookup allocs: %d\n", errno);
             goto cleanup;
         }
 
@@ -600,14 +610,14 @@ static void print_outstanding_combined(struct memleak_bpf *skel, struct syms_cac
         if (!stacks[i].info.total_size)
             continue;
 
+        if (i == env.top)
+            break;
+
         printf("\t%llu bytes in %llu allocations from stack\n", stacks[i].info.total_size, stacks[i].info.number_of_allocs);
         if (env.kernel_trace)
             print_kernel_stack(skel, ksyms, stacks[i].stack_id);
         else
             print_user_stack(skel, syms_cache, stacks[i].stack_id);
-
-        if (i == env.top)
-            break;
     }
 
 cleanup:
