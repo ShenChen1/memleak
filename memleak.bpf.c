@@ -5,8 +5,6 @@
 #include <bpf/bpf_tracing.h>
 #include "memleak.h"
 
-extern int LINUX_KERNEL_VERSION __kconfig;
-
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 10240);
